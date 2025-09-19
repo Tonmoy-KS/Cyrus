@@ -355,7 +355,6 @@ class CyrusEngine:
                 if piece == king_char: return (r, c)
         return None
 
-# The Game class remains the same
 class Game:
     def __init__(self):
         self.engine = CyrusEngine()
