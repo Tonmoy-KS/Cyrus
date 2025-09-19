@@ -1,0 +1,424 @@
+import random
+import copy
+import time
+
+# --- AI and Game Configuration ---
+MAX_SEARCH_TIME = 5  # Maximum time in seconds to think per move
+
+# --- Zobrist Hashing for Transposition Table ---
+PIECE_MAP = {'p':0, 'P':1, 'n':2, 'N':3, 'b':4, 'B':5, 'r':6, 'R':7, 'q':8, 'Q':9, 'k':10, 'K':11}
+PIECE_KEYS = [[random.randint(1, 2**64 - 1) for _ in range(64)] for _ in range(12)]
+TURN_KEY = random.randint(1, 2**64 - 1)
+
+class CyrusEngine:
+    """Main engine class for Cyrus - Improved Version"""
+    def __init__(self):
+        self.board = self.setup_board()
+        self.transposition_table = {}
+        self.piece_values = {'p': 100, 'n': 320, 'b': 280, 'r': 500, 'q': 105, 'k': 20000}
+        self.pst = self._initialize_psts()
+        self.current_hash = self.compute_zobrist_hash()
+        self.start_time = 0
+
+    def setup_board(self):
+        return [
+            ['r', 'n', 'b', 'k', 'q', 'b', 'n', 'r'], ['p', 'p', 'p', 'p', 'p', 'p', 'p', 'p'],
+            ['.', '.', '.', '.', '.', '.', '.', '.'], ['.', '.', '.', '.', '.', '.', '.', '.'],
+            ['.', '.', '.', '.', '.', '.', '.', '.'], ['.', '.', '.', '.', '.', '.', '.', '.'],
+            ['P', 'P', 'P', 'P', 'P', 'P', 'P', 'P'], ['R', 'N', 'B', 'K', 'Q', 'B', 'N', 'R']]
+
+    def _initialize_psts(self):
+        return {
+            'p': [[0,0,0,0,0,0,0,0],[5,10,10,-20,-20,10,10,5],[5,-5,-10,0,0,-10,-5,5],[0,0,0,20,20,0,0,0],[5,5,10,25,25,10,5,5],[10,10,20,30,30,20,10,10],[50,50,50,50,50,50,50,50],[0,0,0,0,0,0,0,0]],
+            'n': [[-50,-40,-30,-30,-30,-30,-40,-50],[-40,-20,0,5,5,0,-20,-40],[-30,5,10,15,15,10,5,-30],[-30,0,15,20,20,15,0,-30],[-30,5,15,20,20,15,5,-30],[-30,0,10,15,15,10,0,-30],[-40,-20,0,0,0,0,-20,-40],[-50,-40,-30,-30,-30,-30,-40,-50]],
+            'b': [[-10,-10,-10,-10,-10,-10,-10,-10],[-10,0,0,0,0,0,0,-10],[-10,0,5,10,10,5,0,-10],[-10,5,5,10,10,5,5,-10],[-10,0,10,10,10,10,0,-10],[-10,10,10,10,10,10,10,-10],[-10,5,0,0,0,0,5,-10],[-10,-10,-10,-10,-10,-10,-10,-10]],
+            'r': [[0,0,0,5,5,0,0,0],[-5,0,0,0,0,0,0,-5],[-5,0,0,0,0,0,0,-5],[-5,0,0,0,0,0,0,-5],[-5,0,0,0,0,0,0,-5],[-5,0,0,0,0,0,0,-5],[5,10,10,10,10,10,10,5],[0,0,0,0,0,0,0,0]],
+            'q': [[-10,-10,-10,-5,-5,-10,-10,-10],[-10,0,0,0,0,0,0,-10],[-10,0,5,5,5,5,0,-10],[-5,0,5,5,5,5,0,-5],[0,0,5,5,5,5,0,-5],[-10,5,5,5,5,5,0,-10],[-10,0,5,0,0,0,0,-10],[-10,-10,-10,-5,-5,-10,-10,-10]],
+            'k': [[20,30,10,0,0,10,30,20],[20,20,0,0,0,0,20,20],[-10,-20,-20,-20,-20,-20,-20,-10],[-20,-30,-30,-40,-40,-30,-30,-20],[-30,-40,-40,-50,-50,-40,-40,-30],[-30,-40,-40,-50,-50,-40,-40,-30],[-30,-40,-40,-50,-50,-40,-40,-30],[-30,-40,-40,-50,-50,-40,-40,-30]]
+        }
+
+    def compute_zobrist_hash(self):
+        h = 0
+        for r in range(8):
+            for c in range(8):
+                piece = self.board[r][c]
+                if piece != '.':
+                    h ^= PIECE_KEYS[PIECE_MAP[piece]][r * 8 + c]
+        return h
+
+    def find_best_move(self, turn):
+        self.start_time = time.time()
+        self.transposition_table = {}
+        best_move = None
+        
+        # Iterative Deepening
+        for depth in range(1, 10): # Max depth of 10
+            try:
+                best_move, score = self._find_best_move_at_depth(turn, depth, best_move)
+                # If a mate is found, no need to search deeper
+                if abs(score) > 10000:
+                    break
+            except TimeoutError:
+                break
+        return best_move
+
+    def _find_best_move_at_depth(self, turn, depth, previous_best):
+        alpha = -float('inf')
+        beta = float('inf')
+        legal_moves = self.get_all_legal_moves(turn)
+        
+        # Prioritize the best move from the previous iteration
+        if previous_best and previous_best in legal_moves:
+            legal_moves.insert(0, legal_moves.pop(legal_moves.index(previous_best)))
+
+        best_move_this_iteration = None
+
+        if turn == 'white':
+            max_eval = -float('inf')
+            for move in legal_moves:
+                board_copy = copy.deepcopy(self.board)
+                hash_copy = self.current_hash
+                self.make_move(move, turn, simulate=True)
+                
+                eval = self.minimax(depth - 1, alpha, beta, False)
+                
+                self.board = board_copy
+                self.current_hash = hash_copy
+
+                if eval > max_eval:
+                    max_eval = eval
+                    best_move_this_iteration = move
+                alpha = max(alpha, eval)
+            return best_move_this_iteration, max_eval
+        else:
+            min_eval = float('inf')
+            for move in legal_moves:
+                board_copy = copy.deepcopy(self.board)
+                hash_copy = self.current_hash
+                self.make_move(move, turn, simulate=True)
+                
+                eval = self.minimax(depth - 1, alpha, beta, True)
+
+                self.board = board_copy
+                self.current_hash = hash_copy
+
+                if eval < min_eval:
+                    min_eval = eval
+                    best_move_this_iteration = move
+                beta = min(beta, eval)
+            return best_move_this_iteration, min_eval
+
+    def minimax(self, depth, alpha, beta, maximizing_player):
+        if time.time() - self.start_time > MAX_SEARCH_TIME:
+            raise TimeoutError()
+            
+        hash_key = self.current_hash
+        tt_entry = self.transposition_table.get(hash_key)
+        if tt_entry and tt_entry['depth'] >= depth:
+            if tt_entry['flag'] == 'EXACT':
+                return tt_entry['score']
+            elif tt_entry['flag'] == 'LOWER':
+                alpha = max(alpha, tt_entry['score'])
+            elif tt_entry['flag'] == 'UPPER':
+                beta = min(beta, tt_entry['score'])
+            if beta <= alpha:
+                return tt_entry['score']
+
+        if depth == 0:
+            return self.quiescence_search(alpha, beta, maximizing_player)
+
+        turn = 'white' if maximizing_player else 'black'
+        legal_moves = self.get_all_legal_moves(turn, sort=True)
+
+        if not legal_moves:
+            return -float('inf') if self.is_in_check(turn) else 0
+
+        best_move = None
+        if maximizing_player:
+            max_eval = -float('inf')
+            for move in legal_moves:
+                board_copy, hash_copy = copy.deepcopy(self.board), self.current_hash
+                self.make_move(move, turn, simulate=True)
+                eval = self.minimax(depth - 1, alpha, beta, False)
+                self.board, self.current_hash = board_copy, hash_copy
+                
+                if eval > max_eval:
+                    max_eval = eval
+                    best_move = move
+                alpha = max(alpha, eval)
+                if beta <= alpha: break
+            
+            flag = 'EXACT' if max_eval > alpha else 'LOWER'
+            self.transposition_table[hash_key] = {'depth': depth, 'score': max_eval, 'flag': flag, 'best_move': best_move}
+            return max_eval
+        else:
+            min_eval = float('inf')
+            for move in legal_moves:
+                board_copy, hash_copy = copy.deepcopy(self.board), self.current_hash
+                self.make_move(move, turn, simulate=True)
+                eval = self.minimax(depth - 1, alpha, beta, True)
+                self.board, self.current_hash = board_copy, hash_copy
+
+                if eval < min_eval:
+                    min_eval = eval
+                    best_move = move
+                beta = min(beta, eval)
+                if beta <= alpha: break
+
+            flag = 'EXACT' if min_eval < beta else 'UPPER'
+            self.transposition_table[hash_key] = {'depth': depth, 'score': min_eval, 'flag': flag, 'best_move': best_move}
+            return min_eval
+
+    def quiescence_search(self, alpha, beta, maximizing_player):
+        stand_pat = self.evaluate_board('white' if maximizing_player else 'black')
+        
+        if maximizing_player:
+            alpha = max(alpha, stand_pat)
+        else:
+            beta = min(beta, stand_pat)
+            
+        if beta <= alpha:
+            return stand_pat
+
+        turn = 'white' if maximizing_player else 'black'
+        captures = self.get_all_legal_moves(turn, captures_only=True, sort=True)
+
+        for move in captures:
+            board_copy, hash_copy = copy.deepcopy(self.board), self.current_hash
+            self.make_move(move, turn, simulate=True)
+            score = self.quiescence_search(alpha, beta, not maximizing_player)
+            self.board, self.current_hash = board_copy, hash_copy
+
+            if maximizing_player:
+                alpha = max(alpha, score)
+            else:
+                beta = min(beta, score)
+            
+            if beta <= alpha:
+                break
+
+        return alpha if maximizing_player else beta
+
+    def make_move(self, move, turn, simulate=False):
+        (sr, sc), (er, ec) = move
+        piece = self.board[sr][sc]
+        target = self.board[er][ec]
+
+        self.current_hash ^= PIECE_KEYS[PIECE_MAP[piece]][sr * 8 + sc]
+        if target != '.':
+            self.current_hash ^= PIECE_KEYS[PIECE_MAP[target]][er * 8 + ec]
+
+        self.board[sr][sc] = '.'
+        if piece.lower() == 'p' and (er == 0 or er == 7):
+            promo_piece = 'Q' if turn == 'white' else 'q'
+            self.board[er][ec] = promo_piece
+            self.current_hash ^= PIECE_KEYS[PIECE_MAP[promo_piece]][er * 8 + ec]
+        else:
+            self.board[er][ec] = piece
+            self.current_hash ^= PIECE_KEYS[PIECE_MAP[piece]][er * 8 + ec]
+
+        if not simulate:
+            self.current_hash ^= TURN_KEY
+
+    def evaluate_board(self, turn):
+        score = 0
+        for r in range(8):
+            for c in range(8):
+                piece = self.board[r][c]
+                if piece != '.':
+                    p_type = piece.lower()
+                    val = self.piece_values[p_type]
+                    pst_val = self.pst[p_type][r][c] if piece.isupper() else self.pst[p_type][7 - r][c]
+                    score += (val + pst_val) if piece.isupper() else -(val + pst_val)
+        
+        # Mobility score
+        # mobility = len(self.get_all_legal_moves(turn))
+        # score += 10 * mobility if turn == 'white' else -10 * mobility
+        return score
+
+    def get_piece_color(self, p):
+        return 'white' if p.isupper() else 'black'
+
+    def get_all_legal_moves(self, color, captures_only=False, sort=False):
+        pseudo_moves = self._generate_pseudo_legal_moves(color, captures_only)
+        legal_moves = []
+        for move in pseudo_moves:
+            board_copy = copy.deepcopy(self.board)
+            self.make_move(move, color, simulate=True)
+            if not self.is_in_check(color):
+                legal_moves.append(move)
+            self.board = board_copy
+        if sort:
+            legal_moves.sort(key=self._score_move, reverse=True)
+        return legal_moves
+
+    def _score_move(self, move):
+        # MVV-LVA (Most Valuable Victim - Least Valuable Aggressor)
+        (sr, sc), (er, ec) = move
+        aggressor = self.board[sr][sc]
+        victim = self.board[er][ec]
+        
+        if victim != '.':
+            return 10 * self.piece_values.get(victim.lower(), 0) - self.piece_values.get(aggressor.lower(), 0)
+        return 0
+
+    def _generate_pseudo_legal_moves(self, color, captures_only):
+        moves = []
+        for r in range(8):
+            for c in range(8):
+                piece = self.board[r][c]
+                if piece != '.' and self.get_piece_color(piece) == color:
+                    moves.extend(self._get_moves_for_piece(r, c))
+        if captures_only:
+            return [m for m in moves if self.board[m[1][0]][m[1][1]] != '.']
+        return moves
+
+    def _get_moves_for_piece(self, r, c):
+        piece = self.board[r][c].lower()
+        if piece == 'p': return self._get_pawn_moves(r, c)
+        if piece == 'n': return self._get_faras_moves(r, c)
+        if piece == 'b': return self._get_fil_moves(r, c)
+        if piece == 'r': return self._get_sliding_moves(r, c, [(1,0),(-1,0),(0,1),(0,-1)])
+        if piece == 'q': return self._get_ferz_moves(r, c)
+        if piece == 'k': return self._get_shah_moves(r, c)
+        return []
+
+    def _get_pawn_moves(self, r, c):
+        moves, color = [], self.get_piece_color(self.board[r][c])
+        direction = -1 if color == 'white' else 1
+        if 0 <= r + direction < 8:
+            if self.board[r + direction][c] == '.': moves.append(((r, c), (r + direction, c)))
+            for dc in [-1, 1]:
+                if 0 <= c + dc < 8 and self.board[r + direction][c + dc] != '.' and self.get_piece_color(self.board[r+direction][c+dc]) != color:
+                    moves.append(((r, c), (r + direction, c + dc)))
+        return moves
+
+    def _get_faras_moves(self, r, c):
+        moves, color = [], self.get_piece_color(self.board[r][c])
+        deltas = [(1,2), (1,-2), (-1,2), (-1,-2), (2,1), (2,-1), (-2,1), (-2,-1)]
+        for dr, dc in deltas:
+            nr, nc = r + dr, c + dc
+            if 0 <= nr < 8 and 0 <= nc < 8 and self.get_piece_color(self.board[nr][nc]) != color:
+                moves.append(((r, c), (nr, nc)))
+        return moves
+
+    def _get_fil_moves(self, r, c):
+        moves, color = [], self.get_piece_color(self.board[r][c])
+        deltas = [(2,2), (2,-2), (-2,2), (-2,-2)]
+        for dr, dc in deltas:
+            nr, nc = r + dr, c + dc
+            if 0 <= nr < 8 and 0 <= nc < 8 and self.get_piece_color(self.board[nr][nc]) != color:
+                moves.append(((r, c), (nr, nc)))
+        return moves
+
+    def _get_ferz_moves(self, r, c):
+        moves, color = [], self.get_piece_color(self.board[r][c])
+        deltas = [(1,1), (1,-1), (-1,1), (-1,-1)]
+        for dr, dc in deltas:
+            nr, nc = r + dr, c + dc
+            if 0 <= nr < 8 and 0 <= nc < 8 and self.get_piece_color(self.board[nr][nc]) != color:
+                moves.append(((r, c), (nr, nc)))
+        return moves
+
+    def _get_shah_moves(self, r, c):
+        moves, color = [], self.get_piece_color(self.board[r][c])
+        deltas = [(1,0),(-1,0),(0,1),(0,-1),(1,1),(1,-1),(-1,1),(-1,-1)]
+        for dr, dc in deltas:
+            nr, nc = r + dr, c + dc
+            if 0 <= nr < 8 and 0 <= nc < 8 and self.get_piece_color(self.board[nr][nc]) != color:
+                moves.append(((r, c), (nr, nc)))
+        return moves
+
+    def _get_sliding_moves(self, r, c, deltas):
+        moves, color = [], self.get_piece_color(self.board[r][c])
+        for dr, dc in deltas:
+            nr, nc = r + dr, c + dc
+            while 0 <= nr < 8 and 0 <= nc < 8:
+                target = self.board[nr][nc]
+                if target == '.': moves.append(((r, c), (nr, nc)))
+                else:
+                    if self.get_piece_color(target) != color: moves.append(((r, c), (nr, nc)))
+                    break
+                nr, nc = nr + dr, nc + dc
+        return moves
+
+    def is_in_check(self, color):
+        king_pos = self.find_king(color)
+        if not king_pos: return True
+        opponent = 'black' if color == 'white' else 'white'
+        return any(move[1] == king_pos for move in self._generate_pseudo_legal_moves(opponent, False))
+
+    def find_king(self, color):
+        king_char = 'K' if color == 'white' else 'k'
+        for r, row in enumerate(self.board):
+            for c, piece in enumerate(row):
+                if piece == king_char: return (r, c)
+        return None
+
+# The Game class remains the same
+class Game:
+    def __init__(self):
+        self.engine = CyrusEngine()
+        self.current_turn = 'white'
+
+    def print_board(self):
+        print("\n  a b c d e f g h")
+        print(" +-----------------+")
+        for i, row in enumerate(self.engine.board):
+            print(f"{8 - i}| {' '.join(row)} |{8 - i}")
+        print(" +-----------------+")
+        print("  a b c d e f g h\n")
+
+    def parse_move(self, move_str):
+        try:
+            sc = ord(move_str[0]) - ord('a'); sr = 8 - int(move_str[1])
+            ec = ord(move_str[2]) - ord('a'); er = 8 - int(move_str[3])
+            if all(0 <= x < 8 for x in [sc, sr, ec, er]): return ((sr, sc), (er, ec))
+        except (ValueError, IndexError): pass
+        return None
+
+    def check_game_over(self):
+        legal_moves = self.engine.get_all_legal_moves(self.current_turn)
+        if not legal_moves:
+            winner = 'Black' if self.current_turn == 'white' else 'White'
+            if self.engine.is_in_check(self.current_turn): return True, f"Checkmate! {winner} wins."
+            else: return True, f"Stalemate! {winner} wins."
+        return False, None
+
+    def play(self):
+        print("--- Cyrus Shatranj Engine V.1.2.0 ---")
+        player_color = input("Do you want to play as (white/black)? ").lower()
+        while player_color not in ['white', 'black']:
+            player_color = input("Invalid choice. Please enter 'white' or 'black': ").lower()
+
+        while True:
+            self.print_board()
+            is_over, message = self.check_game_over()
+            if is_over:
+                print(f"Game Over: {message}")
+                break
+
+            if self.current_turn == player_color:
+                move = None
+                while not move:
+                    move_str = input(f"Enter your move for {player_color} (e.g., e2e4): ")
+                    parsed = self.parse_move(move_str)
+                    if parsed and parsed in self.engine.get_all_legal_moves(player_color):
+                        move = parsed
+                    else: print("Invalid or illegal move. Try again.")
+                self.engine.make_move(move, self.current_turn)
+            else:
+                print(f"Cyrus ({self.current_turn}) is thinking...")
+                start = time.time()
+                best_move = self.engine.find_best_move(self.current_turn)
+                duration = time.time() - start
+                (sr, sc), (er, ec) = best_move
+                move_str = f"{chr(ord('a')+sc)}{8-sr}{chr(ord('a')+ec)}{8-er}"
+                print(f"Cyrus plays: {move_str} (Found in {duration:.2f}s)")
+                self.engine.make_move(best_move, self.current_turn)
+
+            self.current_turn = 'black' if self.current_turn == 'white' else 'white'
+
+if __name__ == "__main__":
+    game = Game()
+    game.play()
