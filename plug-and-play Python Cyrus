@@ -11,7 +11,7 @@ PIECE_KEYS = [[random.randint(1, 2**64 - 1) for _ in range(64)] for _ in range(1
 TURN_KEY = random.randint(1, 2**64 - 1)
 
 class CyrusEngine:
-    """Main engine class for Cyrus - Improved Version"""
+    """Main engine class for Cyrus"""
     def __init__(self):
         self.board = self.setup_board()
         self.transposition_table = {}
