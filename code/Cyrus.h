@@ -5,44 +5,80 @@
 #include <string>
 #include <cstdint>
 #include <unordered_map>
+#include <chrono>
 
-// Type aliases for clarity
-using Bitboard = uint64_t;
-
-enum Color { WHITE, BLACK };
-
+// Represents a single move (from square 0-63, to square 0-63)
 struct Move {
     int from;
     int to;
-    // Add flags for promotion, capture etc. if needed
+    char promotion = ' '; // For potential future use, not in Shatranj
+
+    bool operator==(const Move& other) const {
+        return from == other.from && to == other.to;
+    }
 };
 
-class Board {
-public:
-    Bitboard pieceBitboards[12]; // p, P, n, N, ...
-    Bitboard occupancyBitboards[3]; // WHITE, BLACK, BOTH
-    Color sideToMove;
-
-    Board();
-    void printBoard();
-    void makeMove(const Move& move);
-    // ... other board-related functions
+// For the transposition table
+enum TT_Flag { TT_EXACT, TT_LOWER, TT_UPPER };
+struct TT_Entry {
+    int depth;
+    int score;
+    TT_Flag flag;
 };
 
-class Engine {
+class CyrusEngine {
 public:
-    Engine();
-    Move findBestMove(Board& board);
+    CyrusEngine();
+    void print_board() const;
+    Move find_best_move(char turn);
+    void make_move(const Move& move);
+    std::vector<Move> get_all_legal_moves(char turn, bool sort = false);
+    bool is_in_check(char color) const;
+    bool is_game_over(char turn);
+    std::string get_game_over_message(char turn);
+
+    // Board representation and turn
+    std::vector<std::vector<char>> board;
+    char current_turn = 'w';
 
 private:
-    // This is where you'd implement your search, evaluation, etc.
-    int evaluate(const Board& board);
-    int search(Board& board, int depth, int alpha, int beta, bool maximizingPlayer);
-    std::vector<Move> generateMoves(const Board& board);
+    // --- Internal Logic ---
+    int minimax(int depth, int alpha, int beta, bool maximizing_player);
+    int quiescence_search(int alpha, int beta, bool maximizing_player);
+    int evaluate_board() const;
+    void unmake_move(const Move& move, char piece, char captured_piece);
 
-    // Simplified move generation for demonstration
-    void generatePawnMoves(const Board& board, std::vector<Move>& moves);
-    void generateKnightMoves(const Board& board, std::vector<Move>& moves);
+    // --- Move Generation ---
+    std::vector<Move> _generate_pseudo_legal_moves(char color, bool captures_only) const;
+    void _get_moves_for_piece(int r, int c, std::vector<Move>& moves) const;
+    void _get_pawn_moves(int r, int c, char color, std::vector<Move>& moves) const;
+    void _get_faras_moves(int r, int c, char color, std::vector<Move>& moves) const; // Knight
+    void _get_fil_moves(int r, int c, char color, std::vector<Move>& moves) const;   // Elephant
+    void _get_ferz_moves(int r, int c, char color, std::vector<Move>& moves) const;  // Counselor
+    void _get_shah_moves(int r, int c, char color, std::vector<Move>& moves) const;  // King
+    void _get_sliding_moves(int r, int c, char color, const std::vector<std::pair<int, int>>& deltas, std::vector<Move>& moves) const;
+
+    // --- Helpers ---
+    char get_piece_color(char p) const;
+    std::pair<int, int> find_king(char color) const;
+    int _score_move(const Move& move) const;
+
+    // --- AI Configuration ---
+    static const int SEARCH_DEPTH = 4;
+    std::chrono::steady_clock::time_point search_start_time;
+
+    // --- Zobrist Hashing & Transposition Table ---
+    void init_zobrist();
+    uint64_t compute_zobrist_hash() const;
+    uint64_t current_hash;
+    std::vector<std::vector<uint64_t>> piece_keys;
+    uint64_t turn_key;
+    std::unordered_map<uint64_t, TT_Entry> transposition_table;
+    int piece_map(char p) const;
+
+    // --- Evaluation Data ---
+    std::unordered_map<char, int> piece_values;
+    std::unordered_map<char, std::vector<std::vector<int>>> pst;
 };
 
 #endif // CYRUS_H
