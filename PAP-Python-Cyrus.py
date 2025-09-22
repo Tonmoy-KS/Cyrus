@@ -1,3 +1,4 @@
+# PAP means Plug-And-Play
 import random
 import copy
 import time
